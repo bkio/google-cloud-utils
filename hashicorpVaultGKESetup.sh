@@ -205,7 +205,7 @@ kubectl create secret generic vault-tls \
     --from-file "vault.key=${DIR}/vault.key"
 	
 #apply the Kubernetes configuration file for Vault
-kubectl apply -f "https://raw.githubusercontent.com/sethvargo/vault-kubernetes-workshop/master/k8s/vault.yaml" \
+kubectl apply -f "https://raw.githubusercontent.com/bkio/google-cloud-utils/master/hashicorpVault.yaml" \
 	--cluster="${gkeVaultClusterNamePrefix}_vault"
 
 #Vault is running, it is not available.
@@ -341,3 +341,6 @@ vault write auth/kubernetes/role/applications-role \
     bound_service_account_namespaces=default \
     policies=default,applications-vault-rw \
     ttl=15m
+	
+#Deploy App (Static)
+kubectl apply -f https://raw.githubusercontent.com/bkio/google-cloud-utils/master/hashicorpVaultSidecar.yaml
