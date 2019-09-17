@@ -116,11 +116,8 @@ export vaultLBIP=$(gcloud compute addresses describe vault \
       --region="${vaultClusterLocation}" \
       --format='value(address)')
 
-#create certificates, variables and folder
+#create certificates
 export LB_IP="$(gcloud compute addresses describe vault --region ${vaultClusterLocation} --format 'value(address)')"
-export DIR="$(pwd)/tls"
-rm -rf $DIR
-mkdir -p $DIR
 
 #create the OpenSSL configuration file
 sudo cat > "${DIR}/openssl.cnf" << EOF
@@ -243,6 +240,22 @@ EOF
 #Path to the CA certificate on disk:
 export VAULT_CACERT="$(pwd)/tls/ca.crt"
 
+#Set VAULT_ADDR to the IP of the load balancer. Needed for vault commands.
+export VAULT_ADDR="https://${LB_IP}:443"
+
+#Set VAULT_TOKEN to the decrypted root token. Needed for vault commands.
+export VAULT_TOKEN="$(gsutil cat "gs://${GOOGLE_CLOUD_PROJECT}-vault-storage/root-token.enc" | \
+  base64 --decode | \
+  gcloud kms decrypt \
+    --location $vaultClusterLocation \
+    --keyring vault \
+    --key vault-init \
+    --ciphertext-file - \
+    --plaintext-file -)"
+	
+#Check if environment variables are set well
+vault status
+
 #Generally we want to run Vault in a dedicated Kubernetes cluster or at least a dedicated namespace with tightly controlled RBAC permissions.
 #To follow this best practice, create another Kubernetes cluster which will host our applications.
 if [ "$createApplicationsCluster" = true ] ; then
@@ -304,7 +317,7 @@ export K8S_HOST="$(kubectl config view --raw \
 	
 export K8S_CACERT="$(kubectl config view --raw \
     -o go-template="{{ range .clusters }}{{ if eq .name \"${CLUSTER_NAME}\" }}{{ index .cluster \"certificate-authority-data\" }}{{ end }}{{ end }}" | base64 --decode)"
-	
+
 #Next, enable the Kubernetes auth method on Vault:
 vault auth enable kubernetes
 
