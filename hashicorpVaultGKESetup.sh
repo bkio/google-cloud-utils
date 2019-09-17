@@ -7,13 +7,13 @@ set +e
 #Configuration Starts
 #
 export vaultClusterLocation="europe-north1"
-export vaultVmType="n1-standard-1"
+export vaultVmType="g1-small"
 export vaultDeploymentName="backend-vault"
 
 #Set to false if the applications cluster already exists
 export createApplicationsCluster=true
 export applicationsDeploymentName="backend-apps"
-export applicationsVmType="n1-standard-1"
+export applicationsVmType="g1-small"
 export applicationsClusterLocation="europe-north1"
 #
 #Configuration Ends
@@ -240,21 +240,8 @@ EOF
 #They are storing their data in Google Cloud Storage and they are auto-unsealed with keys encrypted with Google Cloud KMS.
 #All the nodes are load balanced with a load balancer.
 
-#IP of the load balancer
-export VAULT_ADDR="https://${LB_IP}:443"
-
 #Path to the CA certificate on disk:
 export VAULT_CACERT="$(pwd)/tls/ca.crt"
-
-#Decrypted root token:
-export VAULT_TOKEN="$(gsutil cat "gs://${GOOGLE_CLOUD_PROJECT}-vault-storage/root-token.enc" | \
-  base64 --decode | \
-  gcloud kms decrypt \
-    --location ${vaultClusterLocation} \
-    --keyring vault \
-    --key vault-init \
-    --ciphertext-file - \
-    --plaintext-file -)"
 
 #Generally we want to run Vault in a dedicated Kubernetes cluster or at least a dedicated namespace with tightly controlled RBAC permissions.
 #To follow this best practice, create another Kubernetes cluster which will host our applications.
@@ -333,7 +320,7 @@ kubectl create configmap vault \
 	
 #Lastly, create a Kubernetes secret to hold the Certificate Authority. This will be used by all pods and services talking to Vault to verify it's TLS connection.
 kubectl create secret generic vault-tls \
-    --from-file "$(pwd)/tls/ca.crt"
+    --from-file ${VAULT_CACERT}
 	
 #Vault is now configured to talk to the Applications Kubernetes cluster.
 #Apps and services will be able to authenticate using the Vault Kubernetes Auth Method to access Vault secrets.
