@@ -1,24 +1,34 @@
 #Burak Kara - Based on https://codelabs.developers.google.com/codelabs/vault-on-gke/index.html
-#Check commands starts with "NOTE:" comment line!
 
 # Disable exit on non 0
 set +e
 
-#set cluster location
-#NOTE: Change this to your desired location
-export clusterLocation="europe-north1"
-export vmType="n1-standard-1"
-export deploymentName="backend-pn"
+#
+#Configuration Starts
+#
+export vaultClusterLocation="europe-north1"
+export vaultVmType="n1-standard-1"
+export vaultDeploymentName="backend-vault"
+
+#Set to false if the applications cluster already exists
+export createApplicationsCluster=true
+export applicationsDeploymentName="backend-apps"
+export applicationsVmType="n1-standard-1"
+export applicationsClusterLocation="europe-north1"
+#
+#Configuration Ends
+#
 
 export gkeLatestMasterVersion=$(gcloud container get-server-config \
       --project="${GOOGLE_CLOUD_PROJECT}" \
-      --region="${clusterLocation}" \
+      --region="${vaultClusterLocation}" \
       --format='value(validMasterVersions[0])')
 export gkeLatestNodeVersion=$(gcloud container get-server-config \
       --project="${GOOGLE_CLOUD_PROJECT}" \
-      --region="${clusterLocation}" \
+      --region="${vaultClusterLocation}" \
       --format='value(validNodeVersions[0])')
-export gkeClusterNamePrefix="gke_${GOOGLE_CLOUD_PROJECT}_${clusterLocation}"
+export gkeApplicationsClusterNamePrefix="gke_${GOOGLE_CLOUD_PROJECT}_${applicationsClusterLocation}"
+export gkeVaultClusterNamePrefix="gke_${GOOGLE_CLOUD_PROJECT}_${vaultClusterLocation}"
 
 #install vault
 docker run -v $HOME/bin:/software sethvargo/hashicorp-installer vault 1.1.2
@@ -43,10 +53,10 @@ gcloud services enable \
 #create a crypto key ring for Vault and a crypto key for the vault-init service
 gcloud kms keyrings create vault \
 	--project "${GOOGLE_CLOUD_PROJECT}" \
-    --location ${clusterLocation}
+    --location ${vaultClusterLocation}
 gcloud kms keys create vault-init \
 	--project "${GOOGLE_CLOUD_PROJECT}" \
-    --location ${clusterLocation} \
+    --location ${vaultClusterLocation} \
     --keyring vault \
     --purpose encryption
 
@@ -81,33 +91,33 @@ gsutil iam ch \
 #enable the GKE container API on GCP:
 gcloud services enable container.googleapis.com
 
-#creating a cluster
+#creating a vault cluster
 gcloud container clusters create vault \
   --cluster-version "${gkeLatestMasterVersion}" \
   --enable-autorepair \
   --enable-autoupgrade \
   --enable-ip-alias \
-  --machine-type ${vmType} \
+  --machine-type ${vaultVmType} \
   --node-version "${gkeLatestNodeVersion}" \
   --num-nodes 1 \
-  --region ${clusterLocation} \
-  --scopes cloud-platform \
-  --service-account "${SERVICE_ACCOUNT}" \
   --min-nodes 1 \
   --max-nodes 3 \
   --enable-autoscaling \
-  --tags=${deploymentName}
+  --region ${vaultClusterLocation} \
+  --scopes cloud-platform \
+  --service-account "${SERVICE_ACCOUNT}" \
+  --tags=${vaultDeploymentName}
 
 #[!-TMP solution for dev-!] create a public IP
 #NOTE: Do not do this for production!
-gcloud compute addresses create vault --region ${clusterLocation}
+gcloud compute addresses create vault --region ${vaultClusterLocation}
 export vaultLBIP=$(gcloud compute addresses describe vault \
       --project="${GOOGLE_CLOUD_PROJECT}" \
-      --region="${clusterLocation}" \
+      --region="${vaultClusterLocation}" \
       --format='value(address)')
 
 #create certificates, variables and folder
-export LB_IP="$(gcloud compute addresses describe vault --region ${clusterLocation} --format 'value(address)')"
+export LB_IP="$(gcloud compute addresses describe vault --region ${vaultClusterLocation} --format 'value(address)')"
 export DIR="$(pwd)/tls"
 rm -rf $DIR
 mkdir -p $DIR
@@ -178,25 +188,25 @@ cat "${DIR}/vault.crt" "${DIR}/ca.crt" > "${DIR}/vault-combined.crt"
 
 #create configmap, the insecure data such as the Google Cloud Storage bucket name and IP address are placed in a Kubernetes configmap
 kubectl create configmap vault \
-	--cluster="${gkeClusterNamePrefix}_vault" \
+	--cluster="${gkeVaultClusterNamePrefix}_vault" \
 	--from-literal "load_balancer_address=${vaultLBIP}" \
 	--from-literal "gcs_bucket_name=${GOOGLE_CLOUD_PROJECT}-vault-storage" \
 	--from-literal "kms_project=${GOOGLE_CLOUD_PROJECT}" \
-	--from-literal "kms_region=${clusterLocation}" \
+	--from-literal "kms_region=${vaultClusterLocation}" \
 	--from-literal "kms_key_ring=vault" \
 	--from-literal "kms_crypto_key=vault-init" \
-	--from-literal="kms_key_id=projects/${GOOGLE_CLOUD_PROJECT}/locations/${clusterLocation}/keyRings/vault/cryptoKeys/vault-init"
+	--from-literal="kms_key_id=projects/${GOOGLE_CLOUD_PROJECT}/locations/${vaultClusterLocation}/keyRings/vault/cryptoKeys/vault-init"
 
 #secure data like the TLS certificates are put in a Kubernetes secret
 kubectl create secret generic vault-tls \
-	--cluster="${gkeClusterNamePrefix}_vault" \
+	--cluster="${gkeVaultClusterNamePrefix}_vault" \
 	--from-file "${DIR}/ca.crt" \
     --from-file "vault.crt=${DIR}/vault-combined.crt" \
     --from-file "vault.key=${DIR}/vault.key"
 	
 #apply the Kubernetes configuration file for Vault
 kubectl apply -f "https://raw.githubusercontent.com/sethvargo/vault-kubernetes-workshop/master/k8s/vault.yaml" \
-	--cluster="${gkeClusterNamePrefix}_vault"
+	--cluster="${gkeVaultClusterNamePrefix}_vault"
 
 #Vault is running, it is not available.
 #We have not mapped the public IP address allocated earlier to the cluster. 
@@ -240,8 +250,107 @@ export VAULT_CACERT="$(pwd)/tls/ca.crt"
 export VAULT_TOKEN="$(gsutil cat "gs://${GOOGLE_CLOUD_PROJECT}-vault-storage/root-token.enc" | \
   base64 --decode | \
   gcloud kms decrypt \
-    --location ${clusterLocation} \
+    --location ${vaultClusterLocation} \
     --keyring vault \
     --key vault-init \
     --ciphertext-file - \
     --plaintext-file -)"
+
+#Generally we want to run Vault in a dedicated Kubernetes cluster or at least a dedicated namespace with tightly controlled RBAC permissions.
+#To follow this best practice, create another Kubernetes cluster which will host our applications.
+if [ "$createApplicationsCluster" = true ] ; then
+    gcloud container clusters create ${applicationsDeploymentName} \
+		--cluster-version "${gkeLatestMasterVersion}" \
+		--enable-cloud-logging \
+		--enable-cloud-monitoring \
+		--enable-ip-alias \
+		--no-enable-basic-auth \
+		--no-issue-client-certificate \
+		--machine-type ${applicationsVmType} \
+		--num-nodes 1 \
+		--min-nodes 1 \
+		--max-nodes 3 \
+		--enable-autoscaling \
+		--region ${applicationsClusterLocation} \
+		--tags=${applicationsDeploymentName}
+fi
+#This cluster does not have an attached service account. This is expected, because it doesn't need to talk to GCS or KMS directly.
+
+#In our cluster, services will authenticate to Vault using the Kubernetes auth method
+#For this, create the Kubernetes service account
+kubectl create serviceaccount vault-auth
+
+#Next, grant that service account the ability to access the TokenReviewer API via RBAC:
+kubectl apply -f - <<EOH
+---
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRoleBinding
+metadata:
+  name: role-tokenreview-binding
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+- kind: ServiceAccount
+  name: vault-auth
+  namespace: default
+EOH
+
+#Applications cluster full name
+export CLUSTER_NAME="${gkeApplicationsClusterNamePrefix}_${applicationsDeploymentName}"
+
+#In this auth method, pods or services present their signed JWT token to Vault.
+#Vault verifies the JWT token using the Token Reviewer API, and, if successful, Vault returns a token to the requestor.
+#This process requires Vault to be able to talk to the Token Reviewer API in our cluster, 
+#which is where the service account with RBAC permissions is important from the previous steps.
+#For this, we must gather some environment variables
+export SECRET_NAME="$(kubectl get serviceaccount vault-auth \
+    -o go-template='{{ (index .secrets 0).name }}')"
+	
+export TR_ACCOUNT_TOKEN="$(kubectl get secret ${SECRET_NAME} \
+    -o go-template='{{ .data.token }}' | base64 --decode)"
+	
+export K8S_HOST="$(kubectl config view --raw \
+    -o go-template="{{ range .clusters }}{{ if eq .name \"${CLUSTER_NAME}\" }}{{ index .cluster \"server\" }}{{ end }}{{ end }}")"
+	
+export K8S_CACERT="$(kubectl config view --raw \
+    -o go-template="{{ range .clusters }}{{ if eq .name \"${CLUSTER_NAME}\" }}{{ index .cluster \"certificate-authority-data\" }}{{ end }}{{ end }}" | base64 --decode)"
+	
+#Next, enable the Kubernetes auth method on Vault:
+vault auth enable kubernetes
+
+#Configure Vault to talk to the Applications Kubernetes cluster with the service account created earlier.
+vault write auth/kubernetes/config \
+    kubernetes_host="${K8S_HOST}" \
+    kubernetes_ca_cert="${K8S_CACERT}" \
+    token_reviewer_jwt="${TR_ACCOUNT_TOKEN}"
+
+#Create a configmap to store the address of the Vault server. This is how pods and services will talk to Vault. 
+kubectl create configmap vault \
+    --from-literal "vault_addr=https://${LB_IP}"
+	
+#Lastly, create a Kubernetes secret to hold the Certificate Authority. This will be used by all pods and services talking to Vault to verify it's TLS connection.
+kubectl create secret generic vault-tls \
+    --from-file "$(pwd)/tls/ca.crt"
+	
+#Vault is now configured to talk to the Applications Kubernetes cluster.
+#Apps and services will be able to authenticate using the Vault Kubernetes Auth Method to access Vault secrets.
+#At this point, our pods and services can authenticate to Vault, but their authentication will not have any authorization.
+#That's because in Vault, everything is deny by default.
+
+#Create a Vault policy named myapp-rw that grants read and list permission on the data
+#When a user is assigned this policy, they will have the ability to perform CRUD operations on our key
+vault policy write applications-vault-rw - <<EOH
+path "kv/applications/*" {
+  capabilities = ["create", "read", "update", "delete", "list"]
+}
+EOH
+
+#We need to map these policies to the Kubernetes authentication we enabled in the previous step.
+vault write auth/kubernetes/role/applications-role \
+    bound_service_account_names=default \
+    bound_service_account_namespaces=default \
+    policies=default,applications-vault-rw \
+    ttl=15m
