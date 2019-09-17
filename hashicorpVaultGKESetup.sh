@@ -341,6 +341,3 @@ vault write auth/kubernetes/role/applications-role \
     bound_service_account_namespaces=default \
     policies=default,applications-vault-rw \
     ttl=15m
-	
-#Deploy App (Static)
-kubectl apply -f https://raw.githubusercontent.com/bkio/google-cloud-utils/master/hashicorpVaultSidecar.yaml
