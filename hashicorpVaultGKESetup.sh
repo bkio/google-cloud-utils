@@ -7,7 +7,7 @@ set +e
 #set cluster location
 #NOTE: Change this to your desired location
 export clusterLocation="europe-north1"
-export vmType="g1-small"
+export vmType="n1-standard-1"
 export deploymentName="backend-pn"
 
 export gkeLatestMasterVersion=$(gcloud container get-server-config \
