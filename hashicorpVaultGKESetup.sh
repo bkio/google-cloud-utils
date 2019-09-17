@@ -327,7 +327,7 @@ kubectl create secret generic vault-tls \
 #At this point, our pods and services can authenticate to Vault, but their authentication will not have any authorization.
 #That's because in Vault, everything is deny by default.
 
-#Create a Vault policy named myapp-rw that grants read and list permission on the data
+#Create a Vault policy named applications-vault-rw that grants read and list permission on the data
 #When a user is assigned this policy, they will have the ability to perform CRUD operations on our key
 vault policy write applications-vault-rw - <<EOH
 path "kv/applications/*" {
