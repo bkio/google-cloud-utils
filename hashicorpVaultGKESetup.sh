@@ -30,6 +30,20 @@ export gkeLatestNodeVersion=$(gcloud container get-server-config \
 export gkeApplicationsClusterNamePrefix="gke_${GOOGLE_CLOUD_PROJECT}_${applicationsClusterLocation}"
 export gkeVaultClusterNamePrefix="gke_${GOOGLE_CLOUD_PROJECT}_${vaultClusterLocation}"
 
+#setup folders
+export DIR="$(pwd)/tls"
+rm -rf $DIR
+mkdir -p $DIR
+rm -rf $(pwd)/bin
+
+if [ -f ".bashrc_backup_vault" ]
+then
+	rm -rf .bashrc
+	mv .bashrc_backup_vault .bashrc
+else   
+	cp .bashrc .bashrc_backup_vault
+fi
+
 #install vault
 docker run -v $HOME/bin:/software sethvargo/hashicorp-installer vault 1.1.2
 sudo chown -R $(whoami):$(whoami) $HOME/bin/vault
