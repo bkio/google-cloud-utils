@@ -6,6 +6,8 @@ set +e
 #
 #Configuration Starts
 #
+export autoScale=false
+
 export vaultClusterLocation="europe-north1"
 export vaultVmType="g1-small"
 export vaultDeploymentName="backend-vault"
@@ -106,21 +108,38 @@ gsutil iam ch \
 gcloud services enable container.googleapis.com
 
 #creating a vault cluster
-gcloud container clusters create vault \
-  --cluster-version "${gkeLatestMasterVersion}" \
-  --enable-autorepair \
-  --enable-autoupgrade \
-  --enable-ip-alias \
-  --machine-type ${vaultVmType} \
-  --node-version "${gkeLatestNodeVersion}" \
-  --num-nodes 1 \
-  --min-nodes 1 \
-  --max-nodes 3 \
-  --enable-autoscaling \
-  --region ${vaultClusterLocation} \
-  --scopes cloud-platform \
-  --service-account "${SERVICE_ACCOUNT}" \
-  --tags=${vaultDeploymentName}
+if [ "$autoScale" = true ] ; then
+	gcloud container clusters create vault \
+		--cluster-version "${gkeLatestMasterVersion}" \
+		--enable-autorepair \
+		--enable-autoupgrade \
+		--enable-ip-alias \
+		--machine-type ${vaultVmType} \
+		--node-version "${gkeLatestNodeVersion}" \
+		--num-nodes 1 \
+		--min-nodes 1 \
+		--max-nodes 3 \
+		--enable-autoscaling \
+		--region ${vaultClusterLocation} \
+		--scopes cloud-platform \
+		--service-account "${SERVICE_ACCOUNT}" \
+		--tags=${vaultDeploymentName}
+else
+	gcloud container clusters create vault \
+		--cluster-version "${gkeLatestMasterVersion}" \
+		--enable-autorepair \
+		--enable-autoupgrade \
+		--enable-ip-alias \
+		--machine-type ${vaultVmType} \
+		--node-version "${gkeLatestNodeVersion}" \
+		--num-nodes 1 \
+		--min-nodes 1 \
+		--max-nodes 1 \
+		--zone ${vaultClusterLocation}-a \
+		--scopes cloud-platform \
+		--service-account "${SERVICE_ACCOUNT}" \
+		--tags=${vaultDeploymentName}
+fi
 
 #[!-TMP solution for dev-!] create a public IP
 #NOTE: Do not do this for production!
@@ -273,20 +292,36 @@ vault status
 #Generally we want to run Vault in a dedicated Kubernetes cluster or at least a dedicated namespace with tightly controlled RBAC permissions.
 #To follow this best practice, create another Kubernetes cluster which will host our applications.
 if [ "$createApplicationsCluster" = true ] ; then
-    gcloud container clusters create ${applicationsDeploymentName} \
-		--cluster-version "${gkeLatestMasterVersion}" \
-		--enable-cloud-logging \
-		--enable-cloud-monitoring \
-		--enable-ip-alias \
-		--no-enable-basic-auth \
-		--no-issue-client-certificate \
-		--machine-type ${applicationsVmType} \
-		--num-nodes 1 \
-		--min-nodes 1 \
-		--max-nodes 3 \
-		--enable-autoscaling \
-		--region ${applicationsClusterLocation} \
-		--tags=${applicationsDeploymentName}
+	if [ "$autoScale" = true ] ; then
+		gcloud container clusters create ${applicationsDeploymentName} \
+			--cluster-version "${gkeLatestMasterVersion}" \
+			--enable-cloud-logging \
+			--enable-cloud-monitoring \
+			--enable-ip-alias \
+			--no-enable-basic-auth \
+			--no-issue-client-certificate \
+			--machine-type ${applicationsVmType} \
+			--num-nodes 1 \
+			--min-nodes 1 \
+			--max-nodes 3 \
+			--enable-autoscaling \
+			--region ${applicationsClusterLocation} \
+			--tags=${applicationsDeploymentName}
+	else
+		gcloud container clusters create ${applicationsDeploymentName} \
+			--cluster-version "${gkeLatestMasterVersion}" \
+			--enable-cloud-logging \
+			--enable-cloud-monitoring \
+			--enable-ip-alias \
+			--no-enable-basic-auth \
+			--no-issue-client-certificate \
+			--machine-type ${applicationsVmType} \
+			--num-nodes 1 \
+			--min-nodes 1 \
+			--max-nodes 1 \
+			--zone ${applicationsClusterLocation}-a \
+			--tags=${applicationsDeploymentName}
+	fi
 fi
 #This cluster does not have an attached service account. This is expected, because it doesn't need to talk to GCS or KMS directly.
 
